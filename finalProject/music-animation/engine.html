@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>WebGL Music Animation</title>
+</head>
+<body>
+	<canvas width="0" height="0" id="webgl-canvas"></canvas>
+
+    <script src="../common/webgl-debug.js"></script>
+    <script src="../common/math.js"></script>
+    <script src="../common/gl-utils.js"></script>
+    <script src="../common/input.js"></script>
+    <script src="../common/renderloop.js"></script>
+    <script src="../common/camera.js"></script>
+    <script src="../common/grid.js"></script>
+    <script src="../common/objparser.js"></script>
+    <script src="../common/dat.gui.min.js"></script>
+    <script src="../common/stats.min.js"></script>
+
+    <script src="renderer.js"></script>
+    <script src="dirLightRenderer.js"></script>
+    <script src="modeltransform.js"></script>
+    <script src="primitives.js"></script>
+
+    <script src="howler.js"></script>
+
+    <button id="lostbutton" width="300" height="300" onclick="lostrestart()" style="
+        background-color: #63c7d6; border: none; color: #1a3236; padding: 50px 50px; text-align: center;
+        text-decoration: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        font-size: 50px; display:none">You lost. Click to restart.</button>
+
+    <button id="wonbutton" width="300" height="300" onclick="wonrestart()" style="
+        background-color: #63c7d6; border: none; color: #1a3236; padding: 50px 50px; text-align: center;
+        text-decoration: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        font-size: 50px; display:none">You won! Click to restart.</button>
+
+    <button id="startbutton" width="300" height="300" onclick="load()" style="
+        background-color: #63c7d6; border: none; color: #1a3236; padding: 50px 50px; text-align: center;
+        text-decoration: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        font-size: 50px;display:block">Click here to start the animation. Use the arrow keys to move, jump, and dive.</button>
+
+    <script type="text/javascript">
+        "use strict"; // use strict javascript compiling
+
+        //--------------------------------------------------
+        // Global Cashes
+        //--------------------------------------------------
+        var MeshCache = {}; // here all mesh objects are stored, see GLUtils.createMesh() for details on how a mesh is added.
+        var TextureCache = {}; // here all texture objects are stored, see GLUtils.loadTexture() for details on how a texture is added.
+
+        // -----------------------------------------
+        // Global variables
+        // -----------------------------------------
+        var gl;
+        var canvas;
+        var renderLoop;
+
+        var g_renderer;
+        var g_dirLightRenderer;
+
+        var g_camera;
+        var g_cameraController;
+        var circlingFish=[];
+        var orb;
+        var street;
+
+        var fish;
+
+        var pillar1;
+        var pillar2;
+
+        var g_grid;
+
+        var timer = 0;
+        var music;
+        var boolup = false;
+        var booldown = false;
+        var localTime = 1;
+
+        // dat.gui to mute/unmute our sound
+        var gui_data = {mute: false};
+        var gui = new dat.GUI({ width: 100 } );
+        gui.add(gui_data, "mute").onChange(function(value){music?.mute(value);});
+
+        // lighting
+        var g_lightingData = {
+            // TODO: Add lighting data
+            lightDirX: 5.7,
+            lightDirY: 4.8,
+            lightDirZ: 8,
+            lightColorR: 0.0,
+            lightColorG: 0.0,
+            lightColorB: 1.0,
+            ambientColorR: 0.85,
+            ambientColorG: 0.85,
+            ambientColorB: 0.85
+        }
+
+        var cameraData = {
+            positionX :  -50,
+            positionY :  1.5,
+            positionZ :  2,
+            roll : 0.0,
+            pitch : 0.0,
+            yaw : 0,
+            near: 0.1,
+            far: 20,
+            fov: 120,
+            lookAt: false
+        };
+
+        // gui.add(cameraData, "positionX", -10, 10);
+        // gui.add(cameraData, "positionY", -10, 10);
+        // gui.add(cameraData, "positionZ", -10, 10);
+        // gui.add(cameraData, "roll", -180, 180);
+        // gui.add(cameraData, "pitch", -180, 180);
+        // gui.add(cameraData, "yaw", -180, 180);
+        // gui.add(cameraData, "near", 0.001, 2);
+        // gui.add(cameraData, "far", 0.1, 20);
+        // gui.add(cameraData, "fov", 10, 120);
+        // gui.add(cameraData, "lookAt");
+
+        // gui.add(g_lightingData, "lightDirX", -10.0, 10.0);
+        // gui.add(g_lightingData, "lightDirY", -10.0, 10.0);
+        // gui.add(g_lightingData, "lightDirZ", -10.0, 10.0);
+        // gui.add(g_lightingData, "lightColorR", 0.0, 1.0);
+        // gui.add(g_lightingData, "lightColorG", 0.0, 1.0);
+        // gui.add(g_lightingData, "lightColorB", 0.0, 1.0);
+        // gui.add(g_lightingData, "ambientColorR", 0.0, 1.0);
+        // gui.add(g_lightingData, "ambientColorG", 0.0, 1.0);
+        // gui.add(g_lightingData, "ambientColorB", 0.0, 1.0);
+
+        function setup(){
+            canvas = document.getElementById("webgl-canvas");
+            gl = GLUtils.createWebGLInstance(canvas, true);
+            gl.clearColor(0.85, 0.95, 0.9, 1); // set clear color (RGBA)
+            gl.fitScreen();
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+
+            Input.initialize(canvas);
+            // our shader files are loaded here. Once completed, init is called
+            // for now there is only the standardShader, but you can add more by
+            // simply adding another path into the array shaderPaths.
+            let shaderPaths = ["shaders/standardShader.glsl",
+                                "shaders/dirLightShader.glsl"];
+            GLUtils.loadShaders(shaderPaths, init);
+        }
+
+        function init(){
+            g_renderer = new Renderer("standardShader");
+            g_dirLightRenderer = new DirLightRenderer("dirLightShader");
+
+            g_camera = new PerspectiveCamera(45, 0.1, 1000, canvas.width / canvas.height);
+            g_cameraController = new OrbiterCameraController(canvas, g_camera);
+            g_cameraController.target.set(0,1.5,0);
+
+            // TODO: Load textures and add to materials
+            GLUtils.loadTexture("waterMat", "ressources/water.jpg");
+            GLUtils.loadTexture("treeMat", "ressources/tree.jpg");
+            GLUtils.loadTexture("barkMat", "ressources/bark.jpg");
+            GLUtils.loadTexture("sandMat", "ressources/sand.jpg");
+
+            let waterMat = {tint: new V3(1,1,1), mainTexture: "waterMat", shininess:100, specularIntensityl:0.05};
+            let treeMat = {tint: new V3(1,1,1), mainTexture: "treeMat", shininess:100, specularIntensityl:0.05};
+            let barkMat = {tint: new V3(1,1,1), mainTexture: "barkMat", shininess:100, specularIntensityl:0.05};
+            let sandMat = {tint: new V3(1,1,1), mainTexture: "sandMat", shininess:100, specularIntensityl:0.05};
+
+            let material = {tint: new V3(1,1,1)};
+
+            fish = new ModelTransform(OBJLoader.getMesh("fish", "ressources/newfish.obj"), sandMat);
+            fish.scale.set(0.5/3, 0.1/3, 0.5/3);
+            fish.rotation.set(0, -90, 0);
+            fish.position.set(-50,0.3,0);
+
+            pillar1 = new ModelTransform(Primitives.Cube.getMesh(), barkMat);
+            pillar1.scale.set(1,10,1/3);
+            pillar1.position.set(50,0,0);
+
+            pillar2 = new ModelTransform(Primitives.Cube.getMesh(), barkMat);
+            pillar2.scale.set(1,10,1/3);
+            pillar2.position.set(-51.5,0,0);
+
+            street = new ModelTransform(Primitives.Cube.getMesh(), waterMat);
+            street.scale.set(200,0.1,50);
+
+            orb = new ModelTransform(Primitives.Sphere.getMesh(), treeMat);
+            //orb.scale.set(1/3,1/3,1/3);
+            orb.position.set(-1,0,-2);
+
+            for (let i = 0; i < 5; i++) {
+                circlingFish[i] = new ModelTransform(OBJLoader.getMesh("treeMat", "ressources/newfish.obj"), treeMat);
+                circlingFish[i].scale.set(2/10,1.5/10,1.5/10);
+                circlingFish[i].position.set(-10*i,0.1,0);
+            }
+            
+            g_grid = new GridAxis();
+
+            // load an play the music using howler.js
+            // https://howlerjs.com/
+            // documentation: https://github.com/goldfire/howler.js#documentation
+            music = new Howl({
+                src: ['ressources/underwater-19568.mp3'],
+                html5: true // use streaming audio if possible
+            });
+            music.play();
+            music.mute(gui_data.mute);
+
+            renderLoop = new RenderLoop(draw).start();
+        }
+
+        function draw(deltaTime){
+            Input.update();
+            let bpm = 77; // the fish song has 77 beats per minute
+            let bps = bpm/60.0; // this many beats per second
+            let beatDuration = 1.0/bps; // one beat lasts this long
+            timer += deltaTime; // count up timer variable
+            if(timer > beatDuration){ // do stuff every beat
+                timer = Time.time % beatDuration; // we can't simply set it to 0 here, because we will accumulate error.
+                                        // deltaTime is not 100% accurate (eg. with 60 fps 60*deltaTime != 1.00)
+                                        // but maybe 0.98 or 1.01.
+                                        // Since we work with sound and want a consistent event at exact intervals,
+                                        // we have to use the Time.time to decide when to act.
+                let r = Math.random();
+                let g = Math.random();
+                let b = Math.random();
+                gl.clearColor(0.1,0.1,1, 0.4); // set clear color (RGBA)
+            }
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            g_cameraController.update();
+
+            // scale y by 0.1 up and down bps times a second.
+            fish.scale.y =(1 + Math.sin((Time.time * Math.PI * 2) * bps) * 0.1)/9;
+            
+            let arcpos = Math.abs(Math.sqrt(Math.pow((Math.cos((localTime/15 * Math.PI * 20) * bps) * 0.1)*30,2))/3);
+            if (boolup==true){
+                localTime+=deltaTime;
+                fish.position.y=arcpos+0.2;
+                fish.rotation.set(200-162*localTime, fish.rotation.y, fish.rotation.z);
+                if (localTime >=1.5){
+                    boolup=false;
+                    localTime=1;
+                    fish.rotation.x=0;
+                }
+            }
+            if (booldown==true){
+                localTime+=deltaTime;
+                fish.position.y=-arcpos+0.3;
+                fish.rotation.set(-1*(200-162*localTime), fish.rotation.y, fish.rotation.z);
+                if (localTime >=1.5){
+                    booldown=false;
+                    localTime=1;
+                    fish.rotation.x=0;
+                }
+            }
+
+            fish.update();
+            street.update();
+            pillar1.update();
+            pillar2.update();
+            updateorb(deltaTime);
+            updateFish(deltaTime, bps);
+            for (let i = 0; i < 5; i++) {
+                circlingFish[i].update();
+                circlingFish[i].position.z = (Math.sin((Time.time * Math.PI * 1/4) * bps) * 5);
+                circlingFish[i].position.x = Math.pow((-1), i)*10*i + (Math.cos((Time.time * Math.PI * 1/4) * bps) * 5);
+            }
+            
+            orb.update();
+
+            orb.position.z =-(Math.sin((Time.time * Math.PI * 1/14) * bps) * 5);
+            orb.position.x =-(Math.cos((Time.time * Math.PI * 1/14) * bps) * 5);
+
+            let shaderData = { lightingData: g_lightingData};
+            let lightingData = {};
+            lightingData.directionalLight = new V3(g_lightingData.lightDirX,
+                                                 g_lightingData.lightDirY,
+                                                 g_lightingData.lightDirZ);
+            lightingData.directionalColor = new V3(g_lightingData.lightColorR,
+                                                 g_lightingData.lightColorG,
+                                                 g_lightingData.lightColorB);
+            lightingData.ambientColor = new V3(g_lightingData.ambientColorR,
+                                             g_lightingData.ambientColorG,
+                                             g_lightingData.ambientColorB);
+            shaderData.lightingData = lightingData; // attach lighting data to shader data.
+
+            let cameraMatrix;
+            var rotationz = M4.rotationMatrixZ(cameraData.pitch);
+            var rotationx = M4.rotationMatrixX(cameraData.roll);
+            var rotationy = M4.rotationMatrixY(cameraData.yaw);
+            var translation = M4.translationMatrix(cameraData.positionX, cameraData.positionY, cameraData.positionZ);
+
+            var modelMatrix_3 = M4.multM4(rotationx, rotationz);
+            var modelMatrix_4 = M4.multM4(rotationy, modelMatrix_3);
+            cameraMatrix = M4.multM4(translation, modelMatrix_4);
+        
+            let viewMatrix;
+            // TODO: Invert camera matrix to create view matrix
+            viewMatrix = M4.invert(cameraMatrix);
+
+            let aspect = canvas.width/canvas.height;
+            let projectionMatrix;
+            projectionMatrix = M4.perspective(cameraData.fov, cameraData.near, cameraData.far, aspect);
+            
+            // create camera object with matrices attached to pass to renderer
+            let camera = {
+                viewMatrix: viewMatrix,
+                projectionMatrix: projectionMatrix
+            };
+
+            g_dirLightRenderer.drawModel(fish, camera, shaderData);
+            g_dirLightRenderer.drawModel(orb, camera, shaderData);
+            g_dirLightRenderer.drawModel(pillar1, camera, shaderData);
+            g_dirLightRenderer.drawModel(pillar2, camera, shaderData);
+            for (let i = 0; i < 5; i++) {
+                g_dirLightRenderer.drawModel(circlingFish[i], camera, shaderData);
+                g_dirLightRenderer.drawModel(street, camera, shaderData);
+                if(Math.abs(fish.position.x - circlingFish[i].position.x)<=1 && Math.abs(fish.position.y - circlingFish[i].position.y)<=0.3 &&Math.abs(fish.position.z - circlingFish[i].position.z)<=1){
+                    end(camera, shaderData);
+                }
+            }
+            if (fish.position.x >= 50){
+                end2(camera, shaderData);
+            }
+
+            g_grid.draw(g_camera);
+        }
+
+        // this will be executed when the startbutton is pressed, run the program and delete the button
+        function load(){
+            var startbutton = document.getElementById("startbutton").style.display='none';
+            var lostbutton = document.getElementById("lostbutton");
+            setup();
+        }
+
+        function end(camera, shaderData){
+            var lostbutton = document.getElementById("lostbutton").style.display='block';
+            // fish.position.x = -50;
+            orb.position.set(-1,-10,-2);
+            for (let i = 0; i < 5; i++) {
+                circlingFish[i].position.set(-10*i,0.1,0);
+            }
+        }
+
+        function end2(camera, shaderData){
+            var wonbutton = document.getElementById("wonbutton").style.display='block';
+            //fish.position.x = -50;
+            orb.position.set(-1,-10,-2);
+            for (let i = 0; i < 5; i++) {
+                circlingFish[i].position.set(-10*i,0.1,0);
+            }
+        }
+
+        function lostrestart(){
+            var lostbutton = document.getElementById("lostbutton").style.display='none';
+            orb.position.set(-1,0,-2);
+            for (let i = 0; i < 5; i++) {
+                circlingFish[i].position.set(-10*i,0.1,0);
+            }
+            fish.position.x = -50;
+            cameraData.positionX=-50;
+            cameraData.positionY=1.5;
+            cameraData.positionZ=2;
+        }
+
+        function wonrestart(){
+            var lostbutton = document.getElementById("wonbutton").style.display='none';
+            orb.position.set(-1,0,-2);
+            for (let i = 0; i < 5; i++) {
+                circlingFish[i].position.set(-10*i,0.1,0);
+            }
+            fish.position.x = -50;
+            cameraData.positionX=-50;
+            cameraData.positionY=1.5;
+            cameraData.positionZ=2;
+        }
+
+        function updateorb(deltaTime) {
+            for (let i = 0; i < 5; i++) {
+                if(circlingFish[i].position.x>=0 + Math.pow((-1), i)*10*i && circlingFish[i].position.z>-3){
+                    circlingFish[i].rotation.set(0,180,0); //back
+                }
+                if(circlingFish[i].position.x<0 + Math.pow((-1), i)*10*i && circlingFish[i].position.z<3){
+                    circlingFish[i].rotation.set(0,0,0); //forward
+                }
+                if(circlingFish[i].position.z>=3 && circlingFish[i].position.x>0 + Math.pow((-1), i)*10*i){
+                    circlingFish[i].rotation.set(0,90,0); //left
+                }
+                if(circlingFish[i].position.z<-3 && circlingFish[i].position.x<0 + Math.pow((-1), i)*10*i){
+                    circlingFish[i].rotation.set(0,270,0); //right
+                }
+            }
+        }
+
+        function updateFish(deltaTime, bps) {
+            let speed = 15;
+            if(Input.keyHold("arrowup")){
+                boolup = true;
+            }
+            if(Input.keyHold("arrowdown")){
+                booldown = true;
+            }
+            if(Input.keyHold("arrowleft") && fish.position.x>=-50){
+                let forward = fish.localForward;
+                forward.multiplyScalar(deltaTime * speed); // scale according to speed and frameRate
+                fish.position.subtractV(forward);
+                // cameraData.yaw+=0.01;
+                cameraData.positionX=fish.position.x;
+                fish.rotation.set(fish.rotation.x, 90, fish.rotation.z);
+            }
+            if(Input.keyHold("arrowright") && fish.position.x<=50){
+                let forward = fish.localForward;
+                forward.multiplyScalar(deltaTime * speed); // scale according to speed and frameRate
+                fish.position.subtractV(forward);
+                // cameraData.yaw-=0.01;
+                cameraData.positionX=fish.position.x;
+                fish.rotation.set(fish.rotation.x, -90, fish.rotation.z);
+                }
+            fish.update();
+        }
+    </script>
+</body>
+</html>
